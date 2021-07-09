@@ -1,5 +1,7 @@
 # kittenFS32
 
+**Beware: Current master is version 0.02 with API-change! Look at tag v0.01 if you need the old version for compatibility.**
+
 ## What is this?
 kittenFS32 is a small (somewhat), simple (i hope) (and restrictive) implementation of Microsoft FAT32 file system for interfacing a SD-card with a microcontroller. It was written for and tested on Atmel (now Microchip) AVR but - as it is written in standard-C - can be used on other targets.
 
@@ -10,39 +12,40 @@ Yes, i do. I originally planned to use [FatFS](http://elm-chan.org/fsw/ff/00inde
 In order to keep things small and simple this code makes a few **IMPORTANT** assumptions, amongst others:
 * While FatFS supports several FAT-variants this code is FAT32 only.
 * While FatFS is (as far as i know) endian-independant this code assumes that your compiler and your target are little-endian.
-* This code assumes that your SD-card contains a single FAT structure instead of the usual two. This simplifies the code but increases the chance of a catastrophic data loss. See disclaimer and code for formating an SD-card the right way below.
-* This code assumes a sector size of 512 bytes and a single sector per cluster. Again, this is no problem under Linux, see below.
+* This code assumes that your SD-card contains a single FAT structure instead of the usual two. This simplifies the code but increases the chance of a catastrophic data loss. See disclaimer and command below for formating an SD-card the right way under Linux.
+* This code assumes a sector size of 512 bytes and a single sector per cluster. Again, see below for Linux command.
 * This code uses uint32_t for stuff like sectorcount so the maximum size of your card is "limited" to about 4 billion sectors or 2TB.
 * This code does not know about sub-directories. Every file needs to be / will be created in the root-directory of your card. This is - of course - due to code size and complexity.
-* You can only work on a single file at the time (but you can always close it and open another file). This has to do with code size but also RAM footprint.
 * This code is NOT optimized for speed. E.g. there is no support for multi block read (CMD18). If you need to read/write massive amounts of data with high troughput this is not the code you are looking for.
 * This code only supports old-styled 8.3 filenames in UPPERCASE. No support for LFN. No support for Unicode.
 * Because of code size this code contains really little sanity checks and other precautions. It is up to you to do things right.
 
 ## Features
-This code allows you to open an existing file for reading or to create a new file for writing or open an existing file to append data at the end. Seeking is supported only if the file has been opened for reading. For reading/writing the code gives you an ```f_read``` and an ```f_write``` function that are somewhat similar to the standard stuff you know (but not entirely compatible!). The code uses and updates the FSINFO data on the card to not be too slow when creating/extending files. You can get the size of a file and the number of free sectors (and free space by multiplying by 512) on the card. You can *not* delete a file on the card or make it smaller. You can *not* format a card.
+This code allows you to open an existing file for reading or to create a new file for writing or open an existing file to append data at the end. Seeking is supported only if the file has been opened for reading. For reading/writing the code gives you an `f_read` and an `f_write` function that are somewhat similar to the standard stuff you know (but not entirely compatible!). The code uses and updates the FSINFO data on the card to not be too slow when creating/extending files. You can get the size of a file and the number of free sectors (and free space by multiplying by 512) on the card. You can list all files on the card. You can *not* delete a file on the card or make it smaller. You can *not* format a card. You can define how many files can be opened simultaneously at compile-time.
 
 ## API-Overview
 This code provides you with a simple but sufficient (for my needs at least...) API:
 ```
 FS32_status_t f_init(void);
-FS32_status_t f_open(char const * const filename, const char mode);
-FS32_status_t f_close(void);
-FS32_status_t f_read(void * ptr, const uint16_t size, const uint16_t n);
-FS32_status_t f_write(void const * ptr, const uint16_t size, const uint16_t n);
-FS32_status_t f_seek(const uint32_t pos);
-uint32_t f_tell(void);
+FS32_status_t f_open(uint8_t * const filenr, char const * const filename, const char mode);
+FS32_status_t f_close(const uint8_t filenr);
+FS32_status_t f_read(const uint8_t filenr, void * ptr, const uint16_t size, const uint16_t n);
+FS32_status_t f_write(const uint8_t filenr, void const * ptr, const uint16_t size, const uint16_t n);
+FS32_status_t f_seek(const uint8_t filenr, const uint32_t pos);
+uint32_t f_tell(const uint8_t filenr);
 uint32_t get_free_sectors_count(void);
-uint32_t get_file_size(void);
+uint32_t get_file_size(const uint8_t filenr);
+FS32_status_t f_ls(const f_ls_callback callback);
 ```
-If you don't need some functionality you can disable it a compile-time. Look at ```FS32_config.h```.  
-Always check the return code if you call a function!
+If you don't need some functionality you can disable it a compile-time. Look at `FS32_config.h`.  
+Always check the return code if you call a function!  
+If `FS32_NB_FILES_MAX` is set to 1 the argument `filenr` of the public functions is ignored and can be any value.
 
 ## Licence and Disclaimer
 This code is licenced under the AGPLv3+ and provided WITHOUT ANY WARRANTY! It is an early and really sparse tested version. **DO NOT USE FOR IMPORTANT OR CRITICAL STUFF. EXPECT LOSS AND/OR CORRUPTION OF DATA!**
 
 ## Detailled API description
-Please note that except for ```STATUS_OK``` (which will be always 0) the actual numerical value of a return code may change between versions of the code. Always use the constants defined in ```FS32_status_t``` (in file ```FS32.h```).
+Please note that except for `STATUS_OK` (which will be always 0) the actual numerical value of a return code may change between versions of the code. Always use the constants defined in `FS32_status_t` (in file `FS32.h`).
 
 ### f_init
 #### Overview
@@ -61,15 +64,17 @@ None
 ### f_open
 #### Overview
 This function opens a file. It supports three simple modes:
-* To read an existing file specify ```'r'```. You will get an error if the file does not exist.
-* To create a new file and write data to it specify ```'w'```. If the file does already exist you will get an error back.
-* To append data to an existing(!) file specify ```'a'```. The file needs to exist on the card already, if not create it using ```'w'```.
+* To read an existing file specify `'r'`. You will get an error if the file does not exist.
+* To create a new file and write data to it specify `'w'`. If the file does already exist you will get an error back.
+* To append data to an existing(!) file specify `'a'`. The file needs to exist on the card already, if not create it using `'w'`.
 #### Parameters
+* A pointer(!) to an `uint8_t` to save under which internal number the file can be accessed - ignored in single file mode.
 * filename: 8.3 (8 chars for name and 3 for extension maximum) and uppercase only, this is NOT checked!
-* mode: See above. Notice this is a char, not a string as for the traditional ```fopen()```.
+* mode: See above. Notice this is a char, not a string as for the traditional `fopen()`.
 #### Return Codes
 * `STATUS_OK`: Success.
-* `OPEN_OTHER_FILE_IS_OPEN`: You need to close the first file before you can open another.
+* `OPEN_FILE_ALREADY_OPEN`: You tried to open an already open file.
+* `OPEN_NO_FREE_SLOT`: You have reached the maximum number of simultaneous open files. See `FS32_NB_FILES_MAX` in `FS32_config.h`.
 * `OPEN_FILE_NOT_FOUND`: The file you want to read from does not exist.
 * `OPEN_FILE_ALREADY_EXISTS`: The file you want to create does already exist. You cannot overwrite or delete it.
 * `OPEN_NO_MORE_SPACE`: The card is full.
@@ -78,9 +83,9 @@ This function opens a file. It supports three simple modes:
 
 ### f_close
 #### Overview
-This function closes the current file so you can open another. It is *really important* as a newly created file is really only created once you call ```f_close()```, so don't forget!
+This function closes the current file so you can open another. It is *really important* as a newly created file is really only created once you call `f_close()`, so don't forget!
 #### Parameters
-None
+* filenr: The internal number of the opened file as written by `f_open()`.
 #### Return Codes
 * `STATUS_OK`: Success.
 * `CLOSE_NO_OPEN_FILE`: There is no open file. This is harmless on its own but means you probably have a bug in your code somewhere. 
@@ -90,7 +95,8 @@ None
 #### Overview
 Read data from a file opened for reading.
 #### Parameters
-As for standard ```fread()``` except you can't specify a FILE-pointer.
+* filenr: The internal number of the opened file as written by `f_open()`.
+The rest is the same as for standard `fread()`.
 #### Return Codes
 * `STATUS_OK`: Success.
 * `READ_FAILED`: The code encountered an EndOfChainMarker. Either you asked for more bytes than the file contains or something is broken inside the FAT.
@@ -99,29 +105,30 @@ As for standard ```fread()``` except you can't specify a FILE-pointer.
 #### Overview
 Write data to a file opened for writing (newly created) or appending.
 #### Parameters
-As for standard ```fwrite()``` except you can't specify a FILE-pointer.
+* filenr: The internal number of the opened file as written by `f_open()`.
+The rest is the same as for standard `fwrite()`.
 #### Return Codes
 * `STATUS_OK`: Success.
 * `WRITE_NO_OPEN_FILE`: No file opened.
 * `WRITE_FILE_READ_ONLY`: You can't write to a file opened with 'r'.
 * `WRITE_NO_MORE_SPACE`: Card is full. The data has not been entirely written.
 
-
 ### f_seek
 #### Overview
 Seek to position inside file opened for reading.
 #### Parameters
-New file position
+* filenr: The internal number of the opened file as written by `f_open()`.
+* New file position
 #### Return Codes
 * `STATUS_OK`: Success.
 * `SEEK_CANT_SEEK_ON_WRITABLE`: You can't seek on a file opened for writing or appending.
 * `SEEK_INVALID_POS`: The position you specified is bigger than the size of the file.
-	
+
 ### f_tell
 #### Overview
 Return current position in file.
 #### Parameters
-None
+* filenr: The internal number of the opened file as written by `f_open()`.
 #### Returns
 Current file position. Sanity check this before further use.
 
@@ -131,16 +138,24 @@ Get the number of free sectors left on the card (from the FSINFO structure).
 #### Parameters
 None
 #### Returns
-Number of free sectors, multiply by 512 to get free space in bytes.
+Number of free sectors, multiply by 512 to get free space in bytes (or divide by 2 to get free space in kilobytes).
 
 ### get_file_size
 #### Overview
-Get the size of the open file.
+Get the size of an open file.
 #### Parameters
-None
+* filenr: The internal number of the opened file as written by `f_open()`.
 #### Returns
 File size in bytes. Sanity check this before further use.
 
+### f_ls
+#### Overview
+List the content of the card using a callback for each file. Caution: Directories are NOT supported!
+#### Parameters
+* callback: The function (returning `void`) to be called for each file. The parameter is of type `char const * const` and contains the filename in 8.3 format and null-terminated. The last call is made with `NULL` as a parameter to signal that we are done.
+#### Return Codes
+* `STATUS_OK`: Success.
+* `LS_LONG_NAME`: Encountered a long filename, this is unsupported!
 
 ## What you need to provide / low-level-API
 This code needs the following functions that you must provide:
@@ -185,23 +200,29 @@ In a nutshell: The API of [avr-libc](https://www.nongnu.org/avr-libc/user-manual
 ## Codesize
 Example using avr-gcc (GCC) 5.4.0. Note that you have to add the lower layer code to interface your SD-card and of course your application code!  
 Notice that i did *not* include `-fshort-enums` as it changes the default ABI. You can probably use it (unless you have huge enums) but you must specify it *for every code file* that is compiled into your project.
-### with all options enabled:
+### with all options enabled and a maximum of two simultaneously open files:
 ```
 kittenFS32$ avr-gcc -c FS32.c -Wall -Wextra -Werror -Os -mcall-prologues -fno-move-loop-invariants -fno-tree-loop-optimize -mmcu=atmega328p -DF_CPU=10000000 -o avr.elf && avr-size avr.elf
    text	   data	    bss	    dec	    hex	filename
-   3844	      0	    583	   4427	   114b	avr.elf
+   4416	      0	    631	   5047	   13b7	avr.elf
 ```
-### read-only configuration without seek:
-```
-kittenFS32$ avr-gcc -c FS32.c -Wall -Wextra -Werror -Os -mcall-prologues -fno-move-loop-invariants -fno-tree-loop-optimize -mmcu=atmega328p -DF_CPU=10000000 -o avr.elf && avr-size avr.elf
-   text	   data	    bss	    dec	    hex	filename
-   2720	      0	    583	   3303	    ce7	avr.elf
-```
-### write-only, no append, no seek:
+### with all options enabled but single file configuration:
 ```
 kittenFS32$ avr-gcc -c FS32.c -Wall -Wextra -Werror -Os -mcall-prologues -fno-move-loop-invariants -fno-tree-loop-optimize -mmcu=atmega328p -DF_CPU=10000000 -o avr.elf && avr-size avr.elf
    text	   data	    bss	    dec	    hex	filename
-   3392	      0	    583	   3975	    f87	avr.elf
+   4016	      0	    585	   4601	   11f9	avr.elf
+```
+### read-only configuration without seek, without ls, single file:
+```
+kittenFS32$ avr-gcc -c FS32.c -Wall -Wextra -Werror -Os -mcall-prologues -fno-move-loop-invariants -fno-tree-loop-optimize -mmcu=atmega328p -DF_CPU=10000000 -o avr.elf && avr-size avr.elf
+   text	   data	    bss	    dec	    hex	filename
+   1658	      0	    576	   2234	    8ba	avr.elf
+```
+### write-only, no append, no seek, no ls, single file:
+```
+kittenFS32$ avr-gcc -c FS32.c -Wall -Wextra -Werror -Os -mcall-prologues -fno-move-loop-invariants -fno-tree-loop-optimize -mmcu=atmega328p -DF_CPU=10000000 -o avr.elf && avr-size avr.elf
+   text	   data	    bss	    dec	    hex	filename
+   3036	      0	    585	   3621	    e25	avr.elf
 ```
 
 ## Benchmark

@@ -1,6 +1,8 @@
-#ifndef __FAT32_STRUCT_H__
-#define __FAT32_STRUCT_H__
+#ifndef __FS32_INTERNALS_H__
+#define __FS32_INTERNALS_H__
 #include <stdint.h>
+
+#include "FS32_config.h"
 
 /*
 Internal stuff of kittenFS32
@@ -11,6 +13,8 @@ Unless you are chasing bugs or want to hack you don't need to look here.
 
 AGPLv3+ and NO WARRANTY!
 */
+
+//Internal FAT32 data structures
 
 typedef struct __attribute__((__packed__))
 {
@@ -88,6 +92,8 @@ typedef struct __attribute__((__packed__))
 #define DIR_ENTRY_FREE 0xE5
 #define DIR_ENTRY_FREE_NO_MORE_DIR 0x00
 
+//Internal data structures
+
 typedef struct
 {
 	bool noFreeSpace;
@@ -104,9 +110,8 @@ typedef struct
 	bool OpenendForAppending;
 	bool OpenedForReading;
 	
-	char Filename[8]; //no '\0'!
-	char Extension[3]; //no '\0'!
-		
+	char Name[8+1+3+1];
+	
 	uint32_t FirstLogicalSector;
 	
 	uint32_t LogicalSector;
@@ -118,6 +123,35 @@ typedef struct
 	uint32_t SectorDirEntry;
 	uint32_t IndexDirEntry;
 } file_t;
+
+//Some sanity checks on the configuration options and some internal defines depending on those options
+
+#if FS32_NO_READ && FS32_NO_WRITE && FS32_NO_APPEND
+#error Either read or write or append must be enabled!
+#endif
+
+#if !FS32_NB_FILES_MAX
+#error You need at least one open file, dont you?
+#endif
+
+#if FS32_NB_FILES_MAX>1
+#define FIRST_ARG_FILENR const uint8_t filenr,
+#define ONLY_ARG_FILENR const uint8_t filenr
+#define FILENR_ARR_INDEX filenr
+#define FILENR_PTR_ARR_INDEX *filenr
+#define FILENR_ONLY_FUNC_ARG filenr
+#define FILENR_FIRST_FUNC_ARG filenr,
+#define FILENR_PTR_FUNC_ARG *filenr,
+#else
+#define SINGLE_FILE_CONFIG 1
+#define FIRST_ARG_FILENR
+#define ONLY_ARG_FILENR void
+#define FILENR_ARR_INDEX 0
+#define FILENR_PTR_ARR_INDEX 0
+#define FILENR_ONLY_FUNC_ARG
+#define FILENR_FIRST_FUNC_ARG
+#define FILENR_PTR_FUNC_ARG
+#endif
 
 //You need to provide these functions:
 void sd_read_sector(const uint32_t sector, uint8_t * const data);

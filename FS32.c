@@ -17,7 +17,7 @@ licenced under AGPLv3+
 
 NO WARRANTY! USE AT YOUR OWN RISK! BETA-VERSION, EXPECT LOSS AND/OR CORRUPTION OF DATA! READ THE DOC!
 
-version 0.01 - 30.06.21
+version 0.02 - 09.07.21
 
 (c) 2021 by kittennbfive
 
@@ -33,7 +33,7 @@ static uint8_t FATIndexLastEntry;
 static fat32_entry_t EndOfClusterChainMarker;
 static uint32_t NbFreeSectors;
 static uint32_t LastAllocatedSector;
-static file_t OpenFile;
+static file_t OpenFiles[FS32_NB_FILES_MAX];
 
 static uint8_t Buffer[512];
 
@@ -41,6 +41,7 @@ static uint8_t Buffer[512];
 
 #define LOGICAL_SECTOR_TO_PHYSICAL(datasector) ((datasector-2)+FirstDataSector)
 
+#if !FS32_NO_APPEND || !FS32_NO_WRITE
 static void update_fsinfo(void)
 {
 	sd_read_sector(1, Buffer);
@@ -49,7 +50,8 @@ static void update_fsinfo(void)
 	fsinfo->FSI_Last_Allocated=LastAllocatedSector;
 	sd_write_sector(1, Buffer);
 }
-	
+#endif
+
 static pos_fat32_entry_t get_pos_fat_entry(const uint32_t sector)
 {	
 	pos_fat32_entry_t p;
@@ -65,13 +67,15 @@ static fat32_entry_t fat32_read_entry(pos_fat32_entry_t const * const pos)
 	return ((fat32_entry_t*)Buffer)[pos->FAT_EntryIndex]&0x0FFFFFFF;
 }
 
+#if !FS32_NO_APPEND || !FS32_NO_WRITE
 static void fat32_write_entry(pos_fat32_entry_t const * const pos, const uint32_t nextSector)
 {
 	sd_read_sector(pos->FAT_SectorNumber, Buffer);
 	((fat32_entry_t*)Buffer)[pos->FAT_EntryIndex]=nextSector;
 	sd_write_sector(pos->FAT_SectorNumber, Buffer);
 }
-	
+#endif
+
 static uint32_t fat32_get_next_sector(const uint32_t sector)
 {
 	pos_fat32_entry_t pos;
@@ -89,15 +93,50 @@ static void read_logical_sector(const uint32_t sector, uint8_t * const data)
 	sd_read_sector(Physical, data);
 }
 
+#if !FS32_NO_APPEND || !FS32_NO_WRITE
 static void write_logical_sector(const uint32_t sector, uint8_t const * const data)
 {
 	uint32_t Physical=LOGICAL_SECTOR_TO_PHYSICAL(sector);
 	sd_write_sector(Physical, data);
 }
+#endif
 
-static void fat32_search_for_file(char const * const filename)
+void fat32_filename_to_string(fat32_directory_entry_t const * const entry, char * const string)
 {
-	OpenFile.FileFound=false;
+	uint8_t i, j;
+	for(i=0, j=0; i<8 && (entry->DIR_Name[i]!=' '); i++, j++)
+		string[j]=entry->DIR_Name[i];
+	if(memcmp(entry->DIR_Ext, "   ", 3))
+	{
+		string[j++]='.';
+		for(i=0; i<3 && (entry->DIR_Ext[i]!=' '); i++, j++)
+			string[j]=entry->DIR_Ext[i];
+	}
+	string[j]='\0';
+}
+
+void filename_to_fat32(uint8_t filenr, fat32_directory_entry_t * const entry)
+{
+#if SINGLE_FILE_CONFIG
+	(void)filenr;
+#endif
+	
+	memset(entry->DIR_Name, ' ', 8);
+	memset(entry->DIR_Ext, ' ', 3);
+	
+	uint8_t i,j;
+	for(i=0, j=0; OpenFiles[FILENR_ARR_INDEX].Name[i] && OpenFiles[FILENR_ARR_INDEX].Name[i]!='.'; i++, j++)
+		entry->DIR_Name[j]=OpenFiles[FILENR_ARR_INDEX].Name[i];
+	if(OpenFiles[FILENR_ARR_INDEX].Name[i])
+	{
+		for(i++, j=0; OpenFiles[FILENR_ARR_INDEX].Name[i]; i++, j++)
+			entry->DIR_Ext[j]=OpenFiles[FILENR_ARR_INDEX].Name[i];
+	}
+}
+
+static void fat32_search_for_file(FIRST_ARG_FILENR char const * const filename)
+{
+	OpenFiles[FILENR_ARR_INDEX].FileFound=false;
 	
 	uint32_t cl=RootSector;
 	
@@ -130,35 +169,27 @@ static void fat32_search_for_file(char const * const filename)
 			}
 			
 			char Name[8+1+3+1];
-			uint8_t i, j;
-			for(i=0, j=0; i<8 && (DirEntry.DIR_Name[i]!=' '); i++, j++)
-				Name[j]=DirEntry.DIR_Name[i];
-			if(memcmp(DirEntry.DIR_Ext, "   ", 3))
-			{
-				Name[j++]='.';
-				for(i=0; i<3 && (DirEntry.DIR_Ext[i]!=' '); i++, j++)
-					Name[j]=DirEntry.DIR_Ext[i];
-			}
-			Name[j]='\0';
+			fat32_filename_to_string(&DirEntry, Name);
 			
 			if(!strcmp(Name, filename))
 			{
-				OpenFile.FileFound=true;
-				OpenFile.LogicalSector=((uint32_t)DirEntry.DIR_FstClusHI<<16)|DirEntry.DIR_FstClusLO;
-				OpenFile.FileSize=DirEntry.DIR_FileSize;
-				OpenFile.SectorDirEntry=cl;
-				OpenFile.IndexDirEntry=NbEntry;
+				OpenFiles[FILENR_ARR_INDEX].FileFound=true;
+				OpenFiles[FILENR_ARR_INDEX].LogicalSector=((uint32_t)DirEntry.DIR_FstClusHI<<16)|DirEntry.DIR_FstClusLO;
+				OpenFiles[FILENR_ARR_INDEX].FileSize=DirEntry.DIR_FileSize;
+				OpenFiles[FILENR_ARR_INDEX].SectorDirEntry=cl;
+				OpenFiles[FILENR_ARR_INDEX].IndexDirEntry=NbEntry;
 				break;
 			}
 		}
 		
-		if(NoMoreEntries || OpenFile.FileFound)
+		if(NoMoreEntries || OpenFiles[FILENR_ARR_INDEX].FileFound)
 			break;
 		
 		cl=fat32_get_next_sector(cl);
 	}
 }
 
+#if !FS32_NO_APPEND || !FS32_NO_WRITE
 static pos_fat32_entry_t fat32_get_next_free_entry(void)
 {
 	pos_fat32_entry_t p;
@@ -206,9 +237,10 @@ static pos_fat32_entry_t fat32_get_next_free_entry(void)
 
 	return p;
 }
+#endif
 
 #if !FS32_NO_WRITE
-static bool create_dir_entry(void) //always in root-directory!
+static bool create_dir_entry(ONLY_ARG_FILENR) //always in root-directory!
 {	
 	uint32_t previous_cl=RootSector;
 	uint32_t cl=RootSector;
@@ -255,13 +287,14 @@ static bool create_dir_entry(void) //always in root-directory!
 	}
 	
 	memset(&DirEntry, 0, sizeof(fat32_directory_entry_t));
-	memcpy(DirEntry.DIR_Name, OpenFile.Filename, 8);
-	memcpy(DirEntry.DIR_Ext, OpenFile.Extension, 3);
+	filename_to_fat32(FILENR_ARR_INDEX, &DirEntry);
+	//memcpy(DirEntry.DIR_Name, OpenFiles[FILENR_ARR_INDEX].Filename, 8);
+	//memcpy(DirEntry.DIR_Ext, OpenFiles[FILENR_ARR_INDEX].Extension, 3);
 	DirEntry.DIR_WrtTime=rtc_get_encoded_time();
 	DirEntry.DIR_WrtDate=rtc_get_encoded_date();
-	DirEntry.DIR_FileSize=OpenFile.FileSize;
-	DirEntry.DIR_FstClusHI=OpenFile.FirstLogicalSector>>16;
-	DirEntry.DIR_FstClusLO=OpenFile.FirstLogicalSector&0xFFFF;
+	DirEntry.DIR_FileSize=OpenFiles[FILENR_ARR_INDEX].FileSize;
+	DirEntry.DIR_FstClusHI=OpenFiles[FILENR_ARR_INDEX].FirstLogicalSector>>16;
+	DirEntry.DIR_FstClusLO=OpenFiles[FILENR_ARR_INDEX].FirstLogicalSector&0xFFFF;
 	
 	memcpy(&(((fat32_directory_entry_t*)Buffer)[Index]), &DirEntry, sizeof(fat32_directory_entry_t));
 	
@@ -272,40 +305,68 @@ static bool create_dir_entry(void) //always in root-directory!
 #endif
 
 #if !FS32_NO_APPEND
-static void update_dir_entry(void)
+static void update_dir_entry(ONLY_ARG_FILENR)
 {
-	read_logical_sector(OpenFile.SectorDirEntry, Buffer);
+	read_logical_sector(OpenFiles[FILENR_ARR_INDEX].SectorDirEntry, Buffer);
 	
 	fat32_directory_entry_t * Entry=(fat32_directory_entry_t*)Buffer;
 	
-	Entry[OpenFile.IndexDirEntry].DIR_FileSize=OpenFile.FileSize;
-	Entry[OpenFile.IndexDirEntry].DIR_WrtTime=rtc_get_encoded_time();
-	Entry[OpenFile.IndexDirEntry].DIR_WrtDate=rtc_get_encoded_date();
+	Entry[OpenFiles[FILENR_ARR_INDEX].IndexDirEntry].DIR_FileSize=OpenFiles[FILENR_ARR_INDEX].FileSize;
+	Entry[OpenFiles[FILENR_ARR_INDEX].IndexDirEntry].DIR_WrtTime=rtc_get_encoded_time();
+	Entry[OpenFiles[FILENR_ARR_INDEX].IndexDirEntry].DIR_WrtDate=rtc_get_encoded_date();
 	
-	write_logical_sector(OpenFile.SectorDirEntry, Buffer);
+	write_logical_sector(OpenFiles[FILENR_ARR_INDEX].SectorDirEntry, Buffer);
 }
 #endif
 
 #if !FS32_NO_APPEND || !FS32_NO_SEEK_TELL
-static void set_file_pos(const uint32_t pos)
+static void set_file_pos(FIRST_ARG_FILENR const uint32_t pos)
 {
-	OpenFile.PosInFile=pos;
-	OpenFile.PosInLogicalSector=pos%512;
+	OpenFiles[FILENR_ARR_INDEX].PosInFile=pos;
+	OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector=pos%512;
 	
 	uint16_t NbSectors=pos/512;
 	
-	uint32_t sector=OpenFile.FirstLogicalSector;
+	uint32_t sector=OpenFiles[FILENR_ARR_INDEX].FirstLogicalSector;
 	
 	while(NbSectors--)
 		sector=fat32_get_next_sector(sector);
 	
-	OpenFile.LogicalSector=sector;	
+	OpenFiles[FILENR_ARR_INDEX].LogicalSector=sector;	
 }
 #endif
 
+#if !SINGLE_FILE_CONFIG
+static int8_t get_free_slot(void)
+{
+	uint8_t i;
+	for(i=0; i<FS32_NB_FILES_MAX; i++)
+	{
+		if(!OpenFiles[i].isInUse)
+			return i;
+	}
+	
+	return -1;
+}
+#endif
+
+static bool check_if_already_open(char const * const name)
+{
+	uint8_t i;
+	for(i=0; i<FS32_NB_FILES_MAX; i++)
+	{
+		if(OpenFiles[i].isInUse && !strcmp(OpenFiles[i].Name, name))
+			return true;
+	}
+	
+	return false;
+}
+
 FS32_status_t f_init(void)
 {
-	OpenFile.isInUse=false;
+	uint8_t i;
+	for(i=0; i<FS32_NB_FILES_MAX; i++)
+		OpenFiles[i].isInUse=false;
 	
 	//read main header from sector 0
 	sd_read_sector(0, Buffer);
@@ -353,30 +414,42 @@ FS32_status_t f_init(void)
 	return STATUS_OK;
 }
 
-FS32_status_t f_open(char const * const filename, const char mode)
+FS32_status_t f_open(uint8_t * const filenr, char const * const filename, const char mode)
 {
-	if(OpenFile.isInUse)
-		return OPEN_OTHER_FILE_IS_OPEN;
+	if(check_if_already_open(filename))
+		return OPEN_FILE_ALREADY_OPEN;
 	
-	fat32_search_for_file(filename);
+#if !SINGLE_FILE_CONFIG	
+	int8_t slot=get_free_slot();
+	if(slot<0)
+		return OPEN_NO_FREE_SLOT;
+		
+	(*filenr)=(uint8_t)slot;
+#else
+	(void)filenr;
+	if(OpenFiles[FILENR_ARR_INDEX].isInUse)
+		return OPEN_NO_FREE_SLOT;
+#endif
+
+	fat32_search_for_file(FILENR_PTR_FUNC_ARG filename);
 	
 #if !FS32_NO_READ
 	if(mode=='r')
 	{
-		if(OpenFile.FileFound==false)
+		if(OpenFiles[FILENR_PTR_ARR_INDEX].FileFound==false)
 			return OPEN_FILE_NOT_FOUND;
 		
-		OpenFile.isNewFile=false;
-		OpenFile.OpenedForReading=true;
-		OpenFile.PosInFile=0;
-		OpenFile.PosInLogicalSector=0;
+		OpenFiles[FILENR_PTR_ARR_INDEX].isNewFile=false;
+		OpenFiles[FILENR_PTR_ARR_INDEX].OpenedForReading=true;
+		OpenFiles[FILENR_PTR_ARR_INDEX].PosInFile=0;
+		OpenFiles[FILENR_PTR_ARR_INDEX].PosInLogicalSector=0;
 	}
 	else
 #endif
 #if !FS32_NO_WRITE
 	if(mode=='w')
 	{
-		if(OpenFile.FileFound==true)
+		if(OpenFiles[FILENR_PTR_ARR_INDEX].FileFound==true)
 			return OPEN_FILE_ALREADY_EXISTS;
 		else
 		{
@@ -385,19 +458,14 @@ FS32_status_t f_open(char const * const filename, const char mode)
 			if(FATEntry.noFreeSpace)
 				return OPEN_NO_MORE_SPACE;
 			
-			memset(&OpenFile, 0, sizeof(file_t));
-			OpenFile.isInUse=true;
-			OpenFile.isNewFile=true;
-			OpenFile.FirstLogicalSector=FATEntry.LogicalSector;
-			OpenFile.LogicalSector=FATEntry.LogicalSector;
+			memset(&OpenFiles[FILENR_PTR_ARR_INDEX], 0, sizeof(file_t));
+			OpenFiles[FILENR_PTR_ARR_INDEX].isInUse=true;
+			OpenFiles[FILENR_PTR_ARR_INDEX].isNewFile=true;
+			OpenFiles[FILENR_PTR_ARR_INDEX].FirstLogicalSector=FATEntry.LogicalSector;
+			OpenFiles[FILENR_PTR_ARR_INDEX].LogicalSector=FATEntry.LogicalSector;
 			
-			uint8_t i;
-			memset(OpenFile.Filename, ' ', 8);
-			for(i=0; i<8 && filename[i] && filename[i]!='.'; i++);
-			memcpy(OpenFile.Filename, filename, i);
-			memset(OpenFile.Extension, ' ', 3);
-			if(filename[i]=='.')
-				strncpy(OpenFile.Extension, &filename[i+1], 3);
+			strncpy(OpenFiles[FILENR_PTR_ARR_INDEX].Name, filename, 8+1+3);
+			
 			fat32_write_entry(&FATEntry, EndOfClusterChainMarker);
 		}
 	} else
@@ -405,15 +473,15 @@ FS32_status_t f_open(char const * const filename, const char mode)
 #if !FS32_NO_APPEND
 	if(mode=='a')
 	{
-		if(OpenFile.FileFound==false)
+		if(OpenFiles[FILENR_PTR_ARR_INDEX].FileFound==false)
 			return OPEN_FILE_NOT_FOUND;
 		
-		OpenFile.isInUse=true;
-		OpenFile.isNewFile=false;
-		OpenFile.OpenedForReading=false;
-		OpenFile.OpenendForAppending=true;
+		OpenFiles[FILENR_PTR_ARR_INDEX].isInUse=true;
+		OpenFiles[FILENR_PTR_ARR_INDEX].isNewFile=false;
+		OpenFiles[FILENR_PTR_ARR_INDEX].OpenedForReading=false;
+		OpenFiles[FILENR_PTR_ARR_INDEX].OpenendForAppending=true;
 		
-		set_file_pos(OpenFile.FileSize);
+		set_file_pos(FILENR_PTR_FUNC_ARG OpenFiles[FILENR_PTR_ARR_INDEX].FileSize);
 	} else
 #endif
 		return OPEN_INVALID_MODE;
@@ -421,58 +489,67 @@ FS32_status_t f_open(char const * const filename, const char mode)
 	return STATUS_OK;
 }
 
-FS32_status_t f_close(void)
+FS32_status_t f_close(const uint8_t filenr)
 {
-	if(!OpenFile.isInUse)
+	
+#if SINGLE_FILE_CONFIG
+	(void)filenr;
+#endif
+
+	if(!OpenFiles[FILENR_ARR_INDEX].isInUse)
 		return STATUS_OK;
 	
-	OpenFile.isInUse=false;
+	OpenFiles[FILENR_ARR_INDEX].isInUse=false;
 	
 #if !FS32_NO_WRITE	
-	if(OpenFile.isNewFile)
+	if(OpenFiles[FILENR_ARR_INDEX].isNewFile)
 	{
-		if(create_dir_entry())
+		if(create_dir_entry(FILENR_ONLY_FUNC_ARG))
 			return CLOSE_CREATE_DIR_ENTRY_FAILED;
 	}
 #endif
 #if !FS32_NO_APPEND
-	if(OpenFile.OpenendForAppending)
-		update_dir_entry();
+	if(OpenFiles[FILENR_ARR_INDEX].OpenendForAppending)
+		update_dir_entry(FILENR_ONLY_FUNC_ARG);
 #endif
 	
 	return STATUS_OK;
 }
 
-FS32_status_t f_read(void * ptr, const uint16_t size, const uint16_t n)
+#if !FS32_NO_READ
+FS32_status_t f_read(const uint8_t filenr, void * ptr, const uint16_t size, const uint16_t n)
 {
+	
+#if SINGLE_FILE_CONFIG
+	(void)filenr;
+#endif
+
 	uint32_t NbBytesToRead=(uint32_t)size*n;
 	
-	while(NbBytesToRead && OpenFile.PosInFile<OpenFile.FileSize)
+	while(NbBytesToRead && OpenFiles[FILENR_ARR_INDEX].PosInFile<OpenFiles[FILENR_ARR_INDEX].FileSize)
 	{
 		uint32_t NbToCopy=NbBytesToRead;
-		if(NbToCopy>512-OpenFile.PosInLogicalSector)
-			NbToCopy=512-OpenFile.PosInLogicalSector;
-		if(NbToCopy>(OpenFile.FileSize-OpenFile.PosInFile))
-			NbToCopy=OpenFile.FileSize-OpenFile.PosInFile;
+		if(NbToCopy>512-OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector)
+			NbToCopy=512-OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector;
+		if(NbToCopy>(OpenFiles[FILENR_ARR_INDEX].FileSize-OpenFiles[FILENR_ARR_INDEX].PosInFile))
+			NbToCopy=OpenFiles[FILENR_ARR_INDEX].FileSize-OpenFiles[FILENR_ARR_INDEX].PosInFile;
 
-		read_logical_sector(OpenFile.LogicalSector, Buffer);
+		read_logical_sector(OpenFiles[FILENR_ARR_INDEX].LogicalSector, Buffer);
 		
-		memcpy(ptr, Buffer+OpenFile.PosInLogicalSector, NbToCopy);
+		memcpy(ptr, Buffer+OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector, NbToCopy);
 		
 		ptr+=NbToCopy;
-		OpenFile.PosInFile+=NbToCopy;
-		OpenFile.PosInLogicalSector+=NbToCopy;
-		if(OpenFile.PosInLogicalSector>=512)
+		OpenFiles[FILENR_ARR_INDEX].PosInFile+=NbToCopy;
+		OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector+=NbToCopy;
+		if(OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector>=512)
 		{
-			OpenFile.PosInLogicalSector-=512;
-			OpenFile.LogicalSector=fat32_get_next_sector(OpenFile.LogicalSector);
-			if(OpenFile.LogicalSector==EndOfClusterChainMarker)
+			OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector-=512;
+			OpenFiles[FILENR_ARR_INDEX].LogicalSector=fat32_get_next_sector(OpenFiles[FILENR_ARR_INDEX].LogicalSector);
+			if(OpenFiles[FILENR_ARR_INDEX].LogicalSector==EndOfClusterChainMarker)
 				break;
 		}
 		
 		NbBytesToRead-=NbToCopy;
-		
-
 	}
 	
 	if(NbBytesToRead)
@@ -480,72 +557,90 @@ FS32_status_t f_read(void * ptr, const uint16_t size, const uint16_t n)
 	else
 		return STATUS_OK;
 }
+#endif
 
-FS32_status_t f_write(void const * ptr, const uint16_t size, const uint16_t n)
+#if !FS32_NO_APPEND || !FS32_NO_WRITE
+FS32_status_t f_write(const uint8_t filenr, void const * ptr, const uint16_t size, const uint16_t n)
 {
-	if(!OpenFile.isInUse)
+	
+#if SINGLE_FILE_CONFIG
+	(void)filenr;
+#endif
+
+	if(!OpenFiles[FILENR_ARR_INDEX].isInUse)
 		return WRITE_NO_OPEN_FILE;
 	
-	if(OpenFile.OpenedForReading)
+	if(OpenFiles[FILENR_ARR_INDEX].OpenedForReading)
 		return WRITE_FILE_READ_ONLY;
 	
 	uint32_t NbBytesToWrite=(uint32_t)size*n;
 
 	while(NbBytesToWrite)
 	{
-		uint16_t NbBytesToCopy=512-OpenFile.PosInLogicalSector;
+		uint16_t NbBytesToCopy=512-OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector;
 
 		if(NbBytesToCopy>NbBytesToWrite)
 			NbBytesToCopy=NbBytesToWrite;
 		
 		memset(Buffer, 0, 512);
 		
-		if(OpenFile.PosInLogicalSector!=0)
-			read_logical_sector(OpenFile.LogicalSector, Buffer);
+		if(OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector!=0)
+			read_logical_sector(OpenFiles[FILENR_ARR_INDEX].LogicalSector, Buffer);
 		
-		memcpy(Buffer+OpenFile.PosInLogicalSector, ptr, NbBytesToCopy);
+		memcpy(Buffer+OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector, ptr, NbBytesToCopy);
 		
-		write_logical_sector(OpenFile.LogicalSector, Buffer);
+		write_logical_sector(OpenFiles[FILENR_ARR_INDEX].LogicalSector, Buffer);
 
 		NbBytesToWrite-=NbBytesToCopy;
 		ptr+=NbBytesToCopy;
-		OpenFile.FileSize+=NbBytesToCopy;
-		OpenFile.PosInFile+=NbBytesToCopy;
-		OpenFile.PosInLogicalSector+=NbBytesToCopy;
+		OpenFiles[FILENR_ARR_INDEX].FileSize+=NbBytesToCopy;
+		OpenFiles[FILENR_ARR_INDEX].PosInFile+=NbBytesToCopy;
+		OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector+=NbBytesToCopy;
 		
 		if(NbBytesToWrite)
 		{
-			pos_fat32_entry_t p_curr=get_pos_fat_entry(OpenFile.LogicalSector);
+			pos_fat32_entry_t p_curr=get_pos_fat_entry(OpenFiles[FILENR_ARR_INDEX].LogicalSector);
 			pos_fat32_entry_t p_new=fat32_get_next_free_entry();
 			if(p_new.noFreeSpace)
 				return WRITE_NO_MORE_SPACE;
 			fat32_write_entry(&p_curr, p_new.LogicalSector);
 			fat32_write_entry(&p_new, EndOfClusterChainMarker);
-			OpenFile.LogicalSector=p_new.LogicalSector;
-			OpenFile.PosInLogicalSector=0;
+			OpenFiles[FILENR_ARR_INDEX].LogicalSector=p_new.LogicalSector;
+			OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector=0;
 		}
 	}
 	
 	return STATUS_OK;
 }
+#endif
 
 #if !FS32_NO_SEEK_TELL
-FS32_status_t f_seek(const uint32_t pos)
+FS32_status_t f_seek(const uint8_t filenr, const uint32_t pos)
 {
-	if(!OpenFile.OpenedForReading)
+	
+#if SINGLE_FILE_CONFIG
+	(void)filenr;
+#endif
+
+	if(!OpenFiles[FILENR_ARR_INDEX].OpenedForReading)
 		return SEEK_CANT_SEEK_ON_WRITABLE;
 	
-	if(pos>=OpenFile.FileSize)
+	if(pos>=OpenFiles[FILENR_ARR_INDEX].FileSize)
 		return SEEK_INVALID_POS;
 		
-	set_file_pos(pos);
+	set_file_pos(FILENR_FIRST_FUNC_ARG pos);
 	
 	return STATUS_OK;
 }
 
-uint32_t f_tell(void)
+uint32_t f_tell(const uint8_t filenr)
 {
-	return OpenFile.PosInFile;
+	
+#if SINGLE_FILE_CONFIG
+	(void)filenr;
+#endif
+
+	return OpenFiles[FILENR_ARR_INDEX].PosInFile;
 }
 #endif
 
@@ -554,7 +649,60 @@ uint32_t get_free_sectors_count(void)
 	return NbFreeSectors;
 }
 
-uint32_t get_file_size(void)
+uint32_t get_file_size(const uint8_t filenr)
 {
-	return OpenFile.FileSize;
+	
+#if SINGLE_FILE_CONFIG
+	(void)filenr;
+#endif
+	
+	return OpenFiles[FILENR_ARR_INDEX].FileSize;
 }
+
+#if !FS32_NO_FILE_LISTING
+FS32_status_t f_ls(const f_ls_callback callback)
+{
+	uint32_t cl=RootSector;
+	
+	while(!IS_EOC_MARKER(cl))
+	{
+		fat32_directory_entry_t DirEntry;
+		uint8_t NbEntry=0;
+		
+		bool NoMoreEntries=false;
+		
+		read_logical_sector(cl, Buffer);
+		
+		for(NbEntry=0; NbEntry<512/sizeof(fat32_directory_entry_t); NbEntry++)
+		{
+			memcpy(&DirEntry, &(((fat32_directory_entry_t*)Buffer)[NbEntry]), sizeof(fat32_directory_entry_t));
+			
+			if((uint8_t)DirEntry.DIR_Name[0]==DIR_ENTRY_FREE)
+				continue;
+			
+			if((uint8_t)DirEntry.DIR_Name[0]==DIR_ENTRY_FREE_NO_MORE_DIR)
+			{
+				NoMoreEntries=true;
+				break;
+			}
+			
+			if(DirEntry.DIR_Attr&ATTR_LONG_NAME) //UNSUPPORTED!
+				return LS_LONG_NAME;
+			
+			char Filename[8+1+3+1];
+			fat32_filename_to_string(&DirEntry, Filename);
+			
+			callback(Filename);
+		}
+		
+		if(NoMoreEntries)
+			break;
+		
+		cl=fat32_get_next_sector(cl);
+	}
+	
+	callback(NULL); //signal that we have finished to callback
+	
+	return STATUS_OK;
+}
+#endif
