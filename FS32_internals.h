@@ -9,10 +9,33 @@ Internal stuff of kittenFS32
 
 Unless you are chasing bugs or want to hack you don't need to look here.
 
-(c) 2021 by kittennbfive
+(c) 2021-2022 by kittennbfive
 
 AGPLv3+ and NO WARRANTY!
+
+version 0.04 - 27.03.22
 */
+
+//Master Boot Record and Partition Table
+
+typedef struct __attribute__((__packed__))
+{
+	uint8_t Status; //ignored
+	uint8_t StartSectorCHS[3]; //ignored
+	uint8_t PartitionType;
+	uint8_t LastSectorCHS[3]; //ignored
+	uint32_t StartSectorLBA;
+	uint32_t NumberOfSectors; //ignored, number of _data_ sectors is read from FAT
+} partition_entry_t;
+
+typedef struct __attribute__((__packed__))
+{
+	uint8_t Bootloader[440]; //ignored
+	uint32_t DiskSignature; //ignored
+	uint16_t CopyProtectionInfo; //ignored
+	partition_entry_t Partitions[4];
+	uint16_t BootSignature;
+} master_boot_record_t;
 
 //Internal FAT32 data structures
 
@@ -151,6 +174,14 @@ typedef struct
 #define FILENR_ONLY_FUNC_ARG
 #define FILENR_FIRST_FUNC_ARG
 #define FILENR_PTR_FUNC_ARG
+#endif
+
+#if FS32_PARTITION_SUPPORT
+#define SD_READ_SECTOR(Sector, Buffer) sd_read_sector((StartOfPartition+Sector), Buffer)
+#define SD_WRITE_SECTOR(Sector, Buffer) sd_write_sector((StartOfPartition+Sector), Buffer)
+#else
+#define SD_READ_SECTOR(Sector, Buffer) sd_read_sector(Sector, Buffer)
+#define SD_WRITE_SECTOR(Sector, Buffer) sd_write_sector(Sector, Buffer)
 #endif
 
 //You need to provide these functions:

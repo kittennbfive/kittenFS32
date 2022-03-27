@@ -6,7 +6,9 @@ Public header for kittenFS32
 
 Include this into your project.
 
-(c) 2021 by kittennbfive
+(c) 2021-2022 by kittennbfive
+
+version 0.04 - 27.03.22
 
 AGPLv3+ and NO WARRANTY!
 */
@@ -16,6 +18,11 @@ AGPLv3+ and NO WARRANTY!
 typedef enum
 {
 	STATUS_OK=0,
+	
+	SET_PART_INVALID_NUMBER,
+	SET_PART_INVALID_BOOT_SIG,
+	SET_PART_UNKNOWN_PART_TYPE,
+	SET_PART_NO_VALID_PART,
 	
 	INIT_INVALID_JUMP,
 	INIT_INVALID_BYTES_PER_SEC,
@@ -50,6 +57,7 @@ typedef enum
 
 typedef void (*f_ls_callback)(char const * const file);
 
+FS32_status_t f_set_partition(const uint8_t partition);
 FS32_status_t f_init(void);
 FS32_status_t f_open(uint8_t * const filenr, char const * const filename, const char mode);
 FS32_status_t f_close(const uint8_t filenr);

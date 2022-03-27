@@ -1,9 +1,9 @@
 # kittenFS32
 
-**Beware: Current master is version 0.02 with API-change! Look at tag v0.01 if you need the old version for compatibility.**
+*Beware: Current master is version 0.04 with API-change compared to the very first version! Look at tag v0.01 if you need the old version for compatibility. I recommand migrating to v0.04/current master.*
 
 ## What is this?
-kittenFS32 is a small (somewhat), simple (i hope) (and restrictive) implementation of Microsoft FAT32 file system for interfacing a SD-card with a microcontroller. It was written for and tested on Atmel (now Microchip) AVR but - as it is written in standard-C - can be used on other targets.
+kittenFS32 is a small (somewhat), simple (i hope) (and restrictive) implementation of Microsoft FAT32 file system for interfacing a (SD-)card with a microcontroller. It was written for and tested on Atmel (now Microchip) AVR but - as it is written in standard-C - can be used on other targets.
 
 ## You know FatFS, don't you?
 Yes, i do. I originally planned to use [FatFS](http://elm-chan.org/fsw/ff/00index_e.html), but it uses too much program memory and the code is too compact for me to understand and stripdown. I also know [PetitFS](http://elm-chan.org/fsw/ff/00index_p.html) by the same author. It is much smaller but you can't create or extend files which was a requirement for me. So i looked at the (somewhat horrible) FAT specifications and wrote my own implementation.
@@ -13,6 +13,7 @@ In order to keep things small and simple this code makes a few **IMPORTANT** ass
 * While FatFS supports several FAT-variants this code is FAT32 only.
 * While FatFS is (as far as i know) endian-independant this code assumes that your compiler and your target are little-endian.
 * This code assumes that your SD-card contains a single FAT structure instead of the usual two. This simplifies the code but increases the chance of a catastrophic data loss. See disclaimer and command below for formating an SD-card the right way under Linux.
+* Basic support for partitions (MBR primary only) can now optionally be enabled, but you can only work on one partition at the same time.
 * This code assumes a sector size of 512 bytes and a single sector per cluster. Again, see below for Linux command.
 * This code uses uint32_t for stuff like sectorcount so the maximum size of your card is "limited" to about 4 billion sectors or 2TB.
 * This code does not know about sub-directories. Every file needs to be / will be created in the root-directory of your card. This is - of course - due to code size and complexity.
@@ -21,11 +22,12 @@ In order to keep things small and simple this code makes a few **IMPORTANT** ass
 * Because of code size this code contains really little sanity checks and other precautions. It is up to you to do things right.
 
 ## Features
-This code allows you to open an existing file for reading or to create a new file for writing or open an existing file to append data at the end. Seeking is supported only if the file has been opened for reading. For reading/writing the code gives you an `f_read` and an `f_write` function that are somewhat similar to the standard stuff you know (but not entirely compatible!). The code uses and updates the FSINFO data on the card to not be too slow when creating/extending files. You can get the size of a file and the number of free sectors (and free space by multiplying by 512) on the card. You can list all files on the card. You can *not* delete a file on the card or make it smaller. You can *not* format a card. You can define how many files can be opened simultaneously at compile-time.
+This code allows you to open an existing file for reading or to create a new file for writing or open an existing file to append data at the end. Seeking is supported only if the file has been opened for reading. For reading/writing the code gives you an `f_read` and an `f_write` function that are somewhat similar to the standard stuff you know (but not entirely compatible!). The code uses and updates the FSINFO data on the card to not be too slow when creating/extending files. You can get the size of a file and the number of free sectors (and free space by multiplying by 512) on the card/partition. You can list all files on the card. You can *not* delete a file on the card or make it smaller. You can *not* format a card. You can define how many files can be opened simultaneously at compile-time.
 
 ## API-Overview
 This code provides you with a simple but sufficient (for my needs at least...) API:
 ```
+FS32_status_t f_set_partition(const uint8_t partition);
 FS32_status_t f_init(void);
 FS32_status_t f_open(uint8_t * const filenr, char const * const filename, const char mode);
 FS32_status_t f_close(const uint8_t filenr);
@@ -45,16 +47,28 @@ If `FS32_NB_FILES_MAX` is set to 1 the argument `filenr` of the public functions
 This code is licenced under the AGPLv3+ and provided WITHOUT ANY WARRANTY! It is an early and really sparse tested version. **DO NOT USE FOR IMPORTANT OR CRITICAL STUFF. EXPECT LOSS AND/OR CORRUPTION OF DATA!**
 
 ## Detailled API description
-Please note that except for `STATUS_OK` (which will be always 0) the actual numerical value of a return code may change between versions of the code. Always use the constants defined in `FS32_status_t` (in file `FS32.h`).
+Please note that except for `STATUS_OK` (which will be always 0) the actual numerical value of a return code can change between versions of the code. Always use the constants defined in `FS32_status_t` (in file `FS32.h`).
+
+### f_set_partition
+#### Overview
+This function is only needed if your card has partitions. It must be called BEFORE `f_init` but AFTER the initialization of the card with your own code. *To use this function you must edit `FS32_config.h` and set `FS32_PARTITION_SUPPORT` to `1`*.
+#### Parameters
+* partition: The number of the partition you want to use. Only partitions of type "MBR primary" are supported. Counting begins at 0 and by specification maximum 4 (primary) partitions can exist on the card, so this parameter must be between 0 and 3.
+#### Return Codes
+* `STATUS_OK`: Success.
+* `SET_PART_INVALID_NUMBER`: The argument is bigger than 3.
+* `SET_PART_INVALID_BOOT_SIG`: The boot signature is invalid. Does your card have a Master Boot Record with a partition table or it is directly formatted? Then set `FS32_PARTITION_SUPPORT` to `0` and do not use this function (it will be unavailable anyway).
+* `SET_PART_UNKNOWN_PART_TYPE`: The partition you specified has a type value other than for FAT32. Only FAT32 is supported by this code obviously...
+* `SET_PART_NO_VALID_PART`: The partition you specified does not exist (number of sectors is 0).
 
 ### f_init
 #### Overview
-This function does some really basic checking of the FS of your card and initializes some internal stuff. It must be called BEFORE using any other function but AFTER your SD-card has been initialized by your own code. As i said there is no check for this, be careful!
+This function does some really basic checking of the FS of your card and initializes some internal stuff. It must be called BEFORE using any other function (except `f_set_partition`) but AFTER your card has been initialized by your own code. As i said there is no check for this, be careful!
 #### Parameters
 None
 #### Return Codes
 * `STATUS_OK` (always 0): Everything is fine (as far as the function checked).
-* `INIT_INVALID_JUMP`: The very first byte of sector 0 does not contain a valid x86 JMP instruction as it should. Is your card correctly formatted? (see below)
+* `INIT_INVALID_JUMP`: The very first byte of sector 0 (of the card or the partition) does not contain a valid x86 JMP instruction as it should. Is your card correctly formatted? (see below)
 * `INIT_INVALID_BYTES_PER_SEC`: Your card does not use 512 bytes per sector, this is mandatory however.
 * `INIT_INVALID_SEC_PER_CLUS`: Your card does not use a single sector per cluster, this is mandatory however.
 * `INIT_NOT_FAT32`: It looks like your card is not formatted with FAT*32*. (BPB_TotSec16 and/or BPB_FATSz16 is not equal to zero)
@@ -184,9 +198,15 @@ Notice that seconds are divided by two. The more fine granularity timestamp that
 
 ## Quick howto for formatting and using your SD-card with this code
 The following part is for Linux and Linux only. I can't and won't give any advice or help for Windows as i am not familiar with it. Please ask a local expert or your favourite search engine.
-### Formatting the card
-**MAKE SURE YOU SPECIFY THE RIGHT DEVICE!**  
-`sudo mkfs.fat -F 32 -s 1 -f 1 /dev/sdXX`
+### Formatting the card directly (without partitions)
+**MAKE SURE YOU SPECIFY THE RIGHT DEVICE! RISK OF CATASTROPHIC LOSS OF DATA!**  
+`sudo mkfs.fat -F 32 -s 1 -f 1 /dev/sdX`
+### Partitionning and formatting the card
+**MAKE SURE YOU SPECIFY THE RIGHT DEVICE! RISK OF CATASTROPHIC LOSS OF DATA!**  
+This is just an example to be adjusted for your needs. In this example we create 2 partitions of (approx.) equal size and format the first one with FAT32.
+`sudo parted --script /dev/sdX mklabel msdos mkpart primary fat32 0 50% mkpart primary fat32 50% 100%`
+Note that for the following command we specify a *partition* (0) instead of the entire device!
+`sudo mkfs.fat -F 32 -s 1 -f 1 /dev/sdX0`
 ### See details of FAT-system and check for errors without writing anything
 `sudo dosfsck -v -n /dev/sdXX`
 
@@ -204,25 +224,31 @@ Notice that i did *not* include `-fshort-enums` as it changes the default ABI. Y
 ```
 kittenFS32$ avr-gcc -c FS32.c -Wall -Wextra -Werror -Os -mcall-prologues -fno-move-loop-invariants -fno-tree-loop-optimize -mmcu=atmega328p -DF_CPU=10000000 -o avr.elf && avr-size avr.elf
    text	   data	    bss	    dec	    hex	filename
-   4416	      0	    631	   5047	   13b7	avr.elf
+   4802	      0	    635	   5437	   153d	avr.elf
+```
+### everything except partition-support with maximum two simultaneously open files:
+```
+kittenFS32$ avr-gcc -c FS32.c -Wall -Wextra -Werror -Os -mcall-prologues -fno-move-loop-invariants -fno-tree-loop-optimize -mmcu=atmega328p -DF_CPU=10000000 -o avr.elf && avr-size avr.elf
+   text	   data	    bss	    dec	    hex	filename
+   4420	      0	    631	   5051	   13bb	avr.elf
 ```
 ### with all options enabled but single file configuration:
 ```
 kittenFS32$ avr-gcc -c FS32.c -Wall -Wextra -Werror -Os -mcall-prologues -fno-move-loop-invariants -fno-tree-loop-optimize -mmcu=atmega328p -DF_CPU=10000000 -o avr.elf && avr-size avr.elf
    text	   data	    bss	    dec	    hex	filename
-   4016	      0	    585	   4601	   11f9	avr.elf
+   4388	      0	    589	   4977	   1371	avr.elf
 ```
-### read-only configuration without seek, without ls, single file:
+### read-only configuration without partition-support, without seek, without ls, single file:
 ```
 kittenFS32$ avr-gcc -c FS32.c -Wall -Wextra -Werror -Os -mcall-prologues -fno-move-loop-invariants -fno-tree-loop-optimize -mmcu=atmega328p -DF_CPU=10000000 -o avr.elf && avr-size avr.elf
    text	   data	    bss	    dec	    hex	filename
    1658	      0	    576	   2234	    8ba	avr.elf
 ```
-### write-only, no append, no seek, no ls, single file:
+### write-only, no partition-support, no append, no seek, no ls, single file:
 ```
 kittenFS32$ avr-gcc -c FS32.c -Wall -Wextra -Werror -Os -mcall-prologues -fno-move-loop-invariants -fno-tree-loop-optimize -mmcu=atmega328p -DF_CPU=10000000 -o avr.elf && avr-size avr.elf
    text	   data	    bss	    dec	    hex	filename
-   3036	      0	    585	   3621	    e25	avr.elf
+   3026	      0	    585	   3611	    e1b	avr.elf
 ```
 
 ## Benchmark

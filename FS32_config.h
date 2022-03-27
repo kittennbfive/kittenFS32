@@ -19,7 +19,11 @@ FS32_NO_SEEK_TELL == 1 removes f_seek() and f_tell()
 
 FS32_NO_FILE_LISTING == 1 removes f_ls()
 
-(c) 2021 by kittennbfive
+FS32_PARTITION_SUPPORT == 1 adds support for partitions (type MBR primary only)
+
+(c) 2021-2022 by kittennbfive
+
+version 0.04 - 27.03.22
 
 AGPLv3+ and NO WARRANTY!
 */
@@ -35,5 +39,7 @@ AGPLv3+ and NO WARRANTY!
 #define FS32_NO_SEEK_TELL 0
 
 #define FS32_NO_FILE_LISTING 0
+
+#define FS32_PARTITION_SUPPORT 0
 
 #endif

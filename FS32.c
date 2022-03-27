@@ -11,19 +11,22 @@
 #include "FS32_config.h"
 
 /*
-Code for kittenFS32 - a small (somewhat), simple (i hope) (and restrictive) implementation of FAT32 for interfacing a SD-card with a microcontroller
+Code for kittenFS32 - a small (somewhat), simple (i hope) (and restrictive) implementation of FAT32 for interfacing a (SD-)card with a microcontroller
 
 licenced under AGPLv3+
 
 NO WARRANTY! USE AT YOUR OWN RISK! BETA-VERSION, EXPECT LOSS AND/OR CORRUPTION OF DATA! READ THE DOC!
 
-version 0.02 - 09.07.21
+(c) 2021-2022 by kittennbfive
 
-(c) 2021 by kittennbfive
+version 0.04 - 27.03.22
 
 This code makes a few IMPORTANT assumptions. Please read the manual!
 */
 
+#if FS32_PARTITION_SUPPORT
+static uint32_t StartOfPartition;
+#endif
 static uint16_t RsvdSecCnt; //number of reserved sectors == first sector of FAT
 static uint32_t FATSz32; //number of sectors for one FAT
 static uint32_t RootSector; //sector where the root dir is
@@ -37,18 +40,18 @@ static file_t OpenFiles[FS32_NB_FILES_MAX];
 
 static uint8_t Buffer[512];
 
-#define IS_EOC_MARKER(value) (value>=0x0FFFFFF8 && value <=0x0FFFFFFF)
+#define IS_EOC_MARKER(value) (value>=0x0FFFFFF8 && value<=0x0FFFFFFF)
 
 #define LOGICAL_SECTOR_TO_PHYSICAL(datasector) ((datasector-2)+FirstDataSector)
 
 #if !FS32_NO_APPEND || !FS32_NO_WRITE
 static void update_fsinfo(void)
 {
-	sd_read_sector(1, Buffer);
+	SD_READ_SECTOR(1, Buffer);
 	fat32_fsinfo_t *fsinfo=(fat32_fsinfo_t*)Buffer;
 	fsinfo->FSI_Free_Count=NbFreeSectors;
 	fsinfo->FSI_Last_Allocated=LastAllocatedSector;
-	sd_write_sector(1, Buffer);
+	SD_WRITE_SECTOR(1, Buffer);
 }
 #endif
 
@@ -63,16 +66,16 @@ static pos_fat32_entry_t get_pos_fat_entry(const uint32_t sector)
 
 static fat32_entry_t fat32_read_entry(pos_fat32_entry_t const * const pos)
 {
-	sd_read_sector(pos->FAT_SectorNumber, Buffer);
+	SD_READ_SECTOR(pos->FAT_SectorNumber, Buffer);
 	return ((fat32_entry_t*)Buffer)[pos->FAT_EntryIndex]&0x0FFFFFFF;
 }
 
 #if !FS32_NO_APPEND || !FS32_NO_WRITE
 static void fat32_write_entry(pos_fat32_entry_t const * const pos, const uint32_t nextSector)
 {
-	sd_read_sector(pos->FAT_SectorNumber, Buffer);
+	SD_READ_SECTOR(pos->FAT_SectorNumber, Buffer);
 	((fat32_entry_t*)Buffer)[pos->FAT_EntryIndex]=nextSector;
-	sd_write_sector(pos->FAT_SectorNumber, Buffer);
+	SD_WRITE_SECTOR(pos->FAT_SectorNumber, Buffer);
 }
 #endif
 
@@ -90,14 +93,14 @@ static uint32_t fat32_get_next_sector(const uint32_t sector)
 static void read_logical_sector(const uint32_t sector, uint8_t * const data)
 {
 	uint32_t Physical=LOGICAL_SECTOR_TO_PHYSICAL(sector);
-	sd_read_sector(Physical, data);
+	SD_READ_SECTOR(Physical, data);
 }
 
 #if !FS32_NO_APPEND || !FS32_NO_WRITE
 static void write_logical_sector(const uint32_t sector, uint8_t const * const data)
 {
 	uint32_t Physical=LOGICAL_SECTOR_TO_PHYSICAL(sector);
-	sd_write_sector(Physical, data);
+	SD_WRITE_SECTOR(Physical, data);
 }
 #endif
 
@@ -213,7 +216,7 @@ static pos_fat32_entry_t fat32_get_next_free_entry(void)
 	
 	for(; Sector<RsvdSecCnt+FATSz32; Sector++)
 	{
-		sd_read_sector(Sector, Buffer);
+		SD_READ_SECTOR(Sector, Buffer);
 		
 		for(; EntryIndex<128; EntryIndex++)
 		{
@@ -288,8 +291,6 @@ static bool create_dir_entry(ONLY_ARG_FILENR) //always in root-directory!
 	
 	memset(&DirEntry, 0, sizeof(fat32_directory_entry_t));
 	filename_to_fat32(FILENR_ARR_INDEX, &DirEntry);
-	//memcpy(DirEntry.DIR_Name, OpenFiles[FILENR_ARR_INDEX].Filename, 8);
-	//memcpy(DirEntry.DIR_Ext, OpenFiles[FILENR_ARR_INDEX].Extension, 3);
 	DirEntry.DIR_WrtTime=rtc_get_encoded_time();
 	DirEntry.DIR_WrtDate=rtc_get_encoded_date();
 	DirEntry.DIR_FileSize=OpenFiles[FILENR_ARR_INDEX].FileSize;
@@ -299,7 +300,7 @@ static bool create_dir_entry(ONLY_ARG_FILENR) //always in root-directory!
 	memcpy(&(((fat32_directory_entry_t*)Buffer)[Index]), &DirEntry, sizeof(fat32_directory_entry_t));
 	
 	write_logical_sector(cl, Buffer);
-	
+		
 	return false;
 }
 #endif
@@ -362,14 +363,40 @@ static bool check_if_already_open(char const * const name)
 	return false;
 }
 
+//public functions
+
+#if FS32_PARTITION_SUPPORT
+FS32_status_t f_set_partition(const uint8_t partition)
+{
+	if(partition>3)
+		return SET_PART_INVALID_NUMBER;
+	
+	sd_read_sector(0, Buffer);
+	master_boot_record_t *mbr=(master_boot_record_t*)Buffer;
+	
+	if(mbr->BootSignature!=0xAA55)
+		return SET_PART_INVALID_BOOT_SIG;
+	
+	if(mbr->Partitions[partition].PartitionType!=0x0C)
+		return SET_PART_UNKNOWN_PART_TYPE;
+	
+	if(mbr->Partitions[partition].NumberOfSectors==0)
+		return SET_PART_NO_VALID_PART;
+	
+	StartOfPartition=mbr->Partitions[partition].StartSectorLBA;
+	
+	return STATUS_OK;
+}
+#endif
+
 FS32_status_t f_init(void)
 {
 	uint8_t i;
 	for(i=0; i<FS32_NB_FILES_MAX; i++)
 		OpenFiles[i].isInUse=false;
 	
-	//read main header from sector 0
-	sd_read_sector(0, Buffer);
+	SD_READ_SECTOR(0, Buffer);
+	
 	fat32_header_t *header=(fat32_header_t*)Buffer;
 	
 	if(header->BS_jmpBoot[0]!=0xEB)
@@ -402,7 +429,7 @@ FS32_status_t f_init(void)
 	EndOfClusterChainMarker=((fat32_entry_t*)Buffer)[1];
 	
 	//FSINFO
-	sd_read_sector(1, Buffer);
+	SD_READ_SECTOR(1, Buffer);
 	fat32_fsinfo_t *fsinfo=(fat32_fsinfo_t*)Buffer;
 	
 	if(fsinfo->FSI_LeadSig!=FSI_LEADSIG)
@@ -582,21 +609,22 @@ FS32_status_t f_write(const uint8_t filenr, void const * ptr, const uint16_t siz
 		if(NbBytesToCopy>NbBytesToWrite)
 			NbBytesToCopy=NbBytesToWrite;
 		
-		memset(Buffer, 0, 512);
-		
-		if(OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector!=0)
-			read_logical_sector(OpenFiles[FILENR_ARR_INDEX].LogicalSector, Buffer);
-		
-		memcpy(Buffer+OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector, ptr, NbBytesToCopy);
-		
-		write_logical_sector(OpenFiles[FILENR_ARR_INDEX].LogicalSector, Buffer);
+		if(NbBytesToCopy) //avoid reading a sector just to write it again without change
+		{			
+			if(OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector!=0)
+				read_logical_sector(OpenFiles[FILENR_ARR_INDEX].LogicalSector, Buffer);
+			
+			memcpy(Buffer+OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector, ptr, NbBytesToCopy);
+			
+			write_logical_sector(OpenFiles[FILENR_ARR_INDEX].LogicalSector, Buffer);
 
-		NbBytesToWrite-=NbBytesToCopy;
-		ptr+=NbBytesToCopy;
-		OpenFiles[FILENR_ARR_INDEX].FileSize+=NbBytesToCopy;
-		OpenFiles[FILENR_ARR_INDEX].PosInFile+=NbBytesToCopy;
-		OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector+=NbBytesToCopy;
-		
+			NbBytesToWrite-=NbBytesToCopy;
+			ptr+=NbBytesToCopy;
+			OpenFiles[FILENR_ARR_INDEX].FileSize+=NbBytesToCopy;
+			OpenFiles[FILENR_ARR_INDEX].PosInFile+=NbBytesToCopy;
+			OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector+=NbBytesToCopy;
+		}
+			
 		if(NbBytesToWrite)
 		{
 			pos_fat32_entry_t p_curr=get_pos_fat_entry(OpenFiles[FILENR_ARR_INDEX].LogicalSector);
