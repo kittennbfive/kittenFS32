@@ -13,7 +13,9 @@ FS32_NO_WRITE == 1 removes f_open('w') (create *new* file for writing)
 
 FS32_NO_APPEND == 1 removes f_open('a') (append to *existing* file)
 
-If FS32_NO_WRITE and FS32_NO_APPEND are true f_write() is removed.
+FS32_NO_MODIFY == 1 removes f_open('m') (read/write/modify *existing* file)
+
+If FS32_NO_WRITE and FS32_NO_APPEND and FS32_NO_MODIFY are true f_write() is removed.
 
 FS32_NO_SEEK_TELL == 1 removes f_seek() and f_tell()
 
@@ -21,9 +23,13 @@ FS32_NO_FILE_LISTING == 1 removes f_ls()
 
 FS32_PARTITION_SUPPORT == 1 adds support for partitions (type MBR primary only)
 
+If MODIFY is enabled FS32_NO_WRITE must be 0 (WRITE enabled).
+
+If APPEND and/or MODIFY is enabled FS32_NO_SEEK_TELL must be 0 (SEEK_TELL enabled).
+
 (c) 2021-2022 by kittennbfive
 
-version 0.04 - 27.03.22
+version 0.06 - 17.04.22
 
 AGPLv3+ and NO WARRANTY!
 */
@@ -36,10 +42,13 @@ AGPLv3+ and NO WARRANTY!
 
 #define FS32_NO_APPEND 0
 
+#define FS32_NO_MODIFY 0
+
 #define FS32_NO_SEEK_TELL 0
 
 #define FS32_NO_FILE_LISTING 0
 
+//disabled by default
 #define FS32_PARTITION_SUPPORT 0
 
 #endif

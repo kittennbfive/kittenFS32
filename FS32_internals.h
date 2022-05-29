@@ -13,7 +13,7 @@ Unless you are chasing bugs or want to hack you don't need to look here.
 
 AGPLv3+ and NO WARRANTY!
 
-version 0.04 - 27.03.22
+version 0.06 - 17.04.22
 */
 
 //Master Boot Record and Partition Table
@@ -129,9 +129,10 @@ typedef struct
 {	
 	bool FileFound;
 	bool isInUse;
-	bool isNewFile;
-	bool OpenendForAppending;
-	bool OpenedForReading;
+	bool isNewFile; //create new file and write to it, seeking not allowed
+	bool OpenendForModify; //read or write existing file, seeking allowed
+	bool OpenendForAppending; //append to end of existing file, seeking not allowed
+	bool OpenedForReading; //read existing file, seeking allowed
 	
 	char Name[8+1+3+1];
 	
@@ -155,6 +156,14 @@ typedef struct
 
 #if !FS32_NB_FILES_MAX
 #error You need at least one open file, dont you?
+#endif
+
+#if FS32_NO_WRITE && !FS32_NO_MODIFY
+#error To modify files you need write-functionality enabled. 
+#endif
+
+#if (!FS32_NO_APPEND || !FS32_NO_MODIFY) && FS32_NO_SEEK_TELL
+#error To modify files or append to files you need f_seek enabled.
 #endif
 
 #if FS32_NB_FILES_MAX>1

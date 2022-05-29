@@ -19,7 +19,7 @@ NO WARRANTY! USE AT YOUR OWN RISK! BETA-VERSION, EXPECT LOSS AND/OR CORRUPTION O
 
 (c) 2021-2022 by kittennbfive
 
-version 0.04 - 27.03.22
+version 0.06 - 17.04.22
 
 This code makes a few IMPORTANT assumptions. Please read the manual!
 */
@@ -178,6 +178,7 @@ static void fat32_search_for_file(FIRST_ARG_FILENR char const * const filename)
 			{
 				OpenFiles[FILENR_ARR_INDEX].FileFound=true;
 				OpenFiles[FILENR_ARR_INDEX].LogicalSector=((uint32_t)DirEntry.DIR_FstClusHI<<16)|DirEntry.DIR_FstClusLO;
+				OpenFiles[FILENR_ARR_INDEX].FirstLogicalSector=OpenFiles[FILENR_ARR_INDEX].LogicalSector; //needed for f_seek for file in modify-mode
 				OpenFiles[FILENR_ARR_INDEX].FileSize=DirEntry.DIR_FileSize;
 				OpenFiles[FILENR_ARR_INDEX].SectorDirEntry=cl;
 				OpenFiles[FILENR_ARR_INDEX].IndexDirEntry=NbEntry;
@@ -305,7 +306,7 @@ static bool create_dir_entry(ONLY_ARG_FILENR) //always in root-directory!
 }
 #endif
 
-#if !FS32_NO_APPEND
+#if !FS32_NO_APPEND || !FS32_NO_MODIFY
 static void update_dir_entry(ONLY_ARG_FILENR)
 {
 	read_logical_sector(OpenFiles[FILENR_ARR_INDEX].SectorDirEntry, Buffer);
@@ -321,8 +322,11 @@ static void update_dir_entry(ONLY_ARG_FILENR)
 #endif
 
 #if !FS32_NO_APPEND || !FS32_NO_SEEK_TELL
-static void set_file_pos(FIRST_ARG_FILENR const uint32_t pos)
+static void set_file_pos(FIRST_ARG_FILENR uint32_t pos)
 {
+	if(pos==FS_SEEK_END)
+		pos=OpenFiles[FILENR_ARR_INDEX].FileSize;
+	
 	OpenFiles[FILENR_ARR_INDEX].PosInFile=pos;
 	OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector=pos%512;
 	
@@ -333,7 +337,7 @@ static void set_file_pos(FIRST_ARG_FILENR const uint32_t pos)
 	while(NbSectors--)
 		sector=fat32_get_next_sector(sector);
 	
-	OpenFiles[FILENR_ARR_INDEX].LogicalSector=sector;	
+	OpenFiles[FILENR_ARR_INDEX].LogicalSector=sector;
 }
 #endif
 
@@ -511,6 +515,21 @@ FS32_status_t f_open(uint8_t * const filenr, char const * const filename, const 
 		set_file_pos(FILENR_PTR_FUNC_ARG OpenFiles[FILENR_PTR_ARR_INDEX].FileSize);
 	} else
 #endif
+#if !FS32_NO_MODIFY
+	if(mode=='m')
+	{
+		if(OpenFiles[FILENR_PTR_ARR_INDEX].FileFound==false)
+			return OPEN_FILE_NOT_FOUND;
+		
+		OpenFiles[FILENR_PTR_ARR_INDEX].isInUse=true;
+		OpenFiles[FILENR_PTR_ARR_INDEX].isNewFile=false;
+		OpenFiles[FILENR_PTR_ARR_INDEX].OpenedForReading=false;
+		OpenFiles[FILENR_PTR_ARR_INDEX].OpenendForAppending=false;
+		OpenFiles[FILENR_PTR_ARR_INDEX].OpenendForModify=true;
+		OpenFiles[FILENR_PTR_ARR_INDEX].PosInFile=0;
+		OpenFiles[FILENR_PTR_ARR_INDEX].PosInLogicalSector=0;
+	} else
+#endif
 		return OPEN_INVALID_MODE;
 	
 	return STATUS_OK;
@@ -535,9 +554,12 @@ FS32_status_t f_close(const uint8_t filenr)
 			return CLOSE_CREATE_DIR_ENTRY_FAILED;
 	}
 #endif
-#if !FS32_NO_APPEND
-	if(OpenFiles[FILENR_ARR_INDEX].OpenendForAppending)
+
+#if !FS32_NO_APPEND || !FS32_NO_MODIFY
+	if(OpenFiles[FILENR_ARR_INDEX].OpenendForAppending || OpenFiles[FILENR_ARR_INDEX].OpenendForModify)
+	{
 		update_dir_entry(FILENR_ONLY_FUNC_ARG);
+	}
 #endif
 	
 	return STATUS_OK;
@@ -586,7 +608,7 @@ FS32_status_t f_read(const uint8_t filenr, void * ptr, const uint16_t size, cons
 }
 #endif
 
-#if !FS32_NO_APPEND || !FS32_NO_WRITE
+#if !FS32_NO_APPEND || !FS32_NO_WRITE || !FS32_NO_MODIFY
 FS32_status_t f_write(const uint8_t filenr, void const * ptr, const uint16_t size, const uint16_t n)
 {
 	
@@ -601,17 +623,23 @@ FS32_status_t f_write(const uint8_t filenr, void const * ptr, const uint16_t siz
 		return WRITE_FILE_READ_ONLY;
 	
 	uint32_t NbBytesToWrite=(uint32_t)size*n;
-
+	
+	
 	while(NbBytesToWrite)
 	{
 		uint16_t NbBytesToCopy=512-OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector;
-
+		
+		bool IncreasingSize=false;
+		
+		if(OpenFiles[FILENR_ARR_INDEX].PosInFile+NbBytesToWrite>OpenFiles[FILENR_ARR_INDEX].FileSize)
+			IncreasingSize=true;
+		
 		if(NbBytesToCopy>NbBytesToWrite)
 			NbBytesToCopy=NbBytesToWrite;
 		
 		if(NbBytesToCopy) //avoid reading a sector just to write it again without change
-		{			
-			if(OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector!=0)
+		{
+			if(OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector!=0 || OpenFiles[FILENR_ARR_INDEX].OpenendForModify)
 				read_logical_sector(OpenFiles[FILENR_ARR_INDEX].LogicalSector, Buffer);
 			
 			memcpy(Buffer+OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector, ptr, NbBytesToCopy);
@@ -620,21 +648,43 @@ FS32_status_t f_write(const uint8_t filenr, void const * ptr, const uint16_t siz
 
 			NbBytesToWrite-=NbBytesToCopy;
 			ptr+=NbBytesToCopy;
-			OpenFiles[FILENR_ARR_INDEX].FileSize+=NbBytesToCopy;
+			
+			if(IncreasingSize)
+				OpenFiles[FILENR_ARR_INDEX].FileSize=OpenFiles[FILENR_ARR_INDEX].PosInFile+NbBytesToCopy;
+
 			OpenFiles[FILENR_ARR_INDEX].PosInFile+=NbBytesToCopy;
 			OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector+=NbBytesToCopy;
 		}
-			
+		
 		if(NbBytesToWrite)
 		{
-			pos_fat32_entry_t p_curr=get_pos_fat_entry(OpenFiles[FILENR_ARR_INDEX].LogicalSector);
-			pos_fat32_entry_t p_new=fat32_get_next_free_entry();
-			if(p_new.noFreeSpace)
-				return WRITE_NO_MORE_SPACE;
-			fat32_write_entry(&p_curr, p_new.LogicalSector);
-			fat32_write_entry(&p_new, EndOfClusterChainMarker);
-			OpenFiles[FILENR_ARR_INDEX].LogicalSector=p_new.LogicalSector;
-			OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector=0;
+			bool NeedMoreSpace=false;
+			
+#if !FS32_NO_MODIFY			
+			if(OpenFiles[FILENR_ARR_INDEX].OpenendForModify)
+			{
+				uint32_t nextSector=fat32_get_next_sector(OpenFiles[FILENR_ARR_INDEX].LogicalSector);
+				if(IS_EOC_MARKER(nextSector))
+					NeedMoreSpace=true;
+				else
+				{
+					OpenFiles[FILENR_ARR_INDEX].LogicalSector=nextSector;
+					OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector=0;
+				}
+			}
+#endif
+			
+			if(OpenFiles[FILENR_ARR_INDEX].OpenendForAppending || OpenFiles[FILENR_ARR_INDEX].isNewFile || NeedMoreSpace)
+			{
+				pos_fat32_entry_t p_curr=get_pos_fat_entry(OpenFiles[FILENR_ARR_INDEX].LogicalSector);
+				pos_fat32_entry_t p_new=fat32_get_next_free_entry();
+				if(p_new.noFreeSpace)
+					return WRITE_NO_MORE_SPACE;
+				fat32_write_entry(&p_curr, p_new.LogicalSector);
+				fat32_write_entry(&p_new, EndOfClusterChainMarker);
+				OpenFiles[FILENR_ARR_INDEX].LogicalSector=p_new.LogicalSector;
+				OpenFiles[FILENR_ARR_INDEX].PosInLogicalSector=0;
+			}
 		}
 	}
 	
@@ -650,10 +700,10 @@ FS32_status_t f_seek(const uint8_t filenr, const uint32_t pos)
 	(void)filenr;
 #endif
 
-	if(!OpenFiles[FILENR_ARR_INDEX].OpenedForReading)
-		return SEEK_CANT_SEEK_ON_WRITABLE;
+	if(!OpenFiles[FILENR_ARR_INDEX].OpenedForReading && !OpenFiles[FILENR_ARR_INDEX].OpenendForModify)
+		return SEEK_CANT_SEEK_IN_THIS_MODE;
 	
-	if(pos>=OpenFiles[FILENR_ARR_INDEX].FileSize)
+	if(pos>=OpenFiles[FILENR_ARR_INDEX].FileSize && pos!=FS_SEEK_END)
 		return SEEK_INVALID_POS;
 		
 	set_file_pos(FILENR_FIRST_FUNC_ARG pos);

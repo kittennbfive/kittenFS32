@@ -8,12 +8,14 @@ Include this into your project.
 
 (c) 2021-2022 by kittennbfive
 
-version 0.04 - 27.03.22
+version 0.06 - 17.04.22
 
 AGPLv3+ and NO WARRANTY!
 */
 
 #include <stdint.h>
+
+#define FS_SEEK_END 0xFFFFFFFF
 
 typedef enum
 {
@@ -48,7 +50,7 @@ typedef enum
 	CLOSE_NO_OPEN_FILE,
 	CLOSE_CREATE_DIR_ENTRY_FAILED,
 	
-	SEEK_CANT_SEEK_ON_WRITABLE,
+	SEEK_CANT_SEEK_IN_THIS_MODE,
 	SEEK_INVALID_POS,
 	
 	LS_LONG_NAME,
