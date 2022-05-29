@@ -181,7 +181,8 @@ uint16_t rtc_get_encoded_date(void);
 uint16_t rtc_get_encoded_time(void);
 ```
 The first two should be pretty much self-explanatory. Note that a sector is always 512 bytes and always entirely read or written. **Note that your code has to deal by itself with IO-Errors**, probably by switching on some LED and/or printing something over serial or on an attached LCD and stop using the SD-card until a human steps in to fix the mess. I could have make the low-level functions return a status code but all those checks increase code size by quite a lot. I agree that this is not a great situation but i don't know how to fix this without increasing the code size (ideas welcome).  
-New: I published an implementation of a suitable low-level SD-card interface, see https://github.com/kittennbfive/avr-sd-interface
+New: I published an implementation of a suitable low-level SD-card interface, see https://github.com/kittennbfive/avr-sd-interface  
+  
 The RTC-functions are needed to specify a valid timestamp when creating a new file. They are not used elsewhere. You can replace them with a dummy if you don't care about the timestamps.
 ### Format of encoded_date
 ```
