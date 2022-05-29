@@ -202,13 +202,13 @@ Notice that seconds are divided by two. The more fine granularity timestamp that
 ## Quick howto for formatting and using your SD-card with this code
 The following part is for Linux and Linux only. I can't and won't give any advice or help for Windows as i am not familiar with it. Please ask a local expert or your favourite search engine.
 ### Formatting the card directly (without partitions)
-**MAKE SURE YOU SPECIFY THE RIGHT DEVICE! RISK OF CATASTROPHIC LOSS OF DATA!**
+**MAKE SURE YOU SPECIFY THE RIGHT DEVICE! RISK OF CATASTROPHIC LOSS OF DATA!**  
 `sudo mkfs.fat -F 32 -s 1 -f 1 /dev/sdX`
 ### Partitionning and formatting the card
-**MAKE SURE YOU SPECIFY THE RIGHT DEVICE! RISK OF CATASTROPHIC LOSS OF DATA!**
-This is just an example to be adjusted for your needs. In this example we create 2 partitions of (approx.) equal size and format the first one with FAT32.
-`sudo parted --script /dev/sdX mklabel msdos mkpart primary fat32 0 50% mkpart primary fat32 50% 100%`
-Note that for the following command we specify a *partition* (0) instead of the entire device!
+**MAKE SURE YOU SPECIFY THE RIGHT DEVICE! RISK OF CATASTROPHIC LOSS OF DATA!**  
+This is just an example to be adjusted for your needs. In this example we create 2 partitions of (approx.) equal size and format the first one with FAT32.  
+`sudo parted --script /dev/sdX mklabel msdos mkpart primary fat32 0 50% mkpart primary fat32 50% 100%`  
+Note that for the following command we specify a *partition* (0) instead of the entire device!  
 `sudo mkfs.fat -F 32 -s 1 -f 1 /dev/sdX0`
 ### See details of FAT-system and check for errors without writing anything
 `sudo dosfsck -v -n /dev/sdX`
